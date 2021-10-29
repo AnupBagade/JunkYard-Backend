@@ -2,15 +2,16 @@
 
 Framework: DJANGO REST
 
-Current Tasks:
-  1. Developing APIs for admin section.
-  2. Below modules are in-progress:
-     - Order Management
-     - Menu Management
-     - Item Management
-     - User Management
-     - Employes Management
+Completed
+  1. Order Management
+  2. Items Management
+  3. User Management
+  4. User authentication
 
 
-Next commit date: 08/02/2021
+In-Progress
+  1. Cart Management
+
+
+Next commit date: 01/11/2021
    
