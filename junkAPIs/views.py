@@ -1,5 +1,5 @@
 from rest_framework.views import APIView
-from rest_framework import generics, mixins
+from rest_framework import generics, mixins, serializers
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -19,12 +19,14 @@ from .CustomPermissions.approvedorders_custom_permissions import ApprovedOrdersC
 from .CustomPermissions.items_custom_permissions import ItemsCustomPermission
 from .CustomPermissions.menu_custom_permissions import MenuCustomPermission
 from .CustomPermissions.cartorders_custom_permission import CartOrderCustomPermission
-from .models import Items, PendingOrders, Menu, Junkuser, ApprovedOrders, CartOrders
+from .models import DeliveryEmployees, Items, PendingOrders, Menu, Junkuser, ApprovedOrders, CartOrders
 from django.core.exceptions import ObjectDoesNotExist
 from junkAPIs.signals import delete_item_image, delete_menu_image
 from datetime import datetime
 from django.db.models import Q
 import json
+import ast
+import time
 
 
 class MenuList(mixins.ListModelMixin, mixins.CreateModelMixin, generics.GenericAPIView):
@@ -99,16 +101,19 @@ class ItemsList(generics.GenericAPIView, mixins.ListModelMixin):
             queryset = queryset.filter(item_type=self.request.query_params.get('item_type'))
         if self.request.query_params.get('item_name', None):
             queryset = queryset.filter(item_name=self.request.query_params.get('item_name'))
+        if self.request.query_params.get('item_name_key', None):
+            queryset = queryset.filter(item_name_key=self.request.query_params.get('item_name_key'))
+            print(queryset)
         if self.request.query_params.get('items', None):
+            print(self.request.query_params.get('items'))
             items_list = self.request.query_params.get('items').split(',')
-            queryset = queryset.filter(item_name__in=items_list)
+            queryset = queryset.filter(item_name_key__in=items_list)
         return queryset
 
     def get_serializer_class(self):
         return ItemsSerializer
 
     def get(self, request, *args, **kwargs):
-
         return self.list(request, *args, **kwargs)
 
     def post(self, request, format=None):
@@ -182,9 +187,9 @@ class JunkusersListPagination(PageNumberPagination):
 
 class PendingOrdersList(mixins.ListModelMixin, mixins.CreateModelMixin, generics.GenericAPIView):
 
-    serializer_class = OrderSerializer
     pagination_class = OrdersListPagination
     permission_classes = [PendingOrdersCustomPermission]
+    message = list()
 
     ORDERS_QUERY_PARAMETERS = {
         'ORDER_ID': 'order_id',
@@ -237,12 +242,35 @@ class PendingOrdersList(mixins.ListModelMixin, mixins.CreateModelMixin, generics
         except ObjectDoesNotExist:
             return Response('Invalid user details, order details.', status=status.HTTP_400_BAD_REQUEST)
 
+    def get_serializer_class(self):
+        return OrderSerializer
 
     def get(self, request, *args, **kwargs):
         return self.list(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        return self.create(request, *args, **kwargs)
+        try:
+            # creating copy of data recieved.
+            order_data = self.request.data.copy()
+            # Creating instance of serializer class
+            serializer_class = self.get_serializer_class()
+            # validating junkuser id
+            junkuser = Junkuser.objects.filter(junkuser_id=self.request.data.get('user'))
+            if junkuser.exists(): 
+                order_data['junkuser_customer'] = junkuser.first().junkuser_id
+                order_data['order_delivery_address'] = self.request.data.get('order_delivery_address')
+                order_data['order_user_mobile_number'] = self.request.data.get('order_user_mobile_number')
+                orders_data_serialized = serializer_class(data=order_data)
+                if orders_data_serialized.is_valid():
+                    orders_data_serialized.save()
+                    # CartOrders.objects.delete(cart_user=junkuser.junkuser_id)
+                    return Response(orders_data_serialized.data, status=status.HTTP_200_OK)
+                else:
+                    return Response(orders_data_serialized.errors, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                self.message.append('Provided user doesnot exist. Please register.')
+        except (ObjectDoesNotExist, KeyError):
+            return Response(self.message, status=status.HTTP_400_BAD_REQUEST)
 
 
 class PendingOrderDetail(mixins.RetrieveModelMixin, mixins.UpdateModelMixin,
@@ -280,6 +308,10 @@ class ApprovedOrdersList(mixins.ListModelMixin, mixins.CreateModelMixin, generic
     serializer_class = ApprovedOrderSerializer
     pagination_class = OrdersListPagination
     permission_classes = [ApprovedOrdersCustomPermission]
+    errorMessage = []
+
+    def get_serializer_class(self):
+        return ApprovedOrderSerializer
 
     def get_queryset(self):
         queryset = ApprovedOrders.objects.all()
@@ -342,7 +374,44 @@ class ApprovedOrdersList(mixins.ListModelMixin, mixins.CreateModelMixin, generic
         return self.list(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        return self.create(request, *args, **kwargs)
+        order_data = request.data.copy()
+        print(order_data)
+        try:
+            # Retrieve pending order details.
+            pending_order_details = PendingOrders.objects.filter(order_id=request.data.get('order_id'))
+            if pending_order_details.exists():
+                pending_order_details = pending_order_details.first()
+                order_data['order_items'] = pending_order_details.order_items
+                order_data['order_user_mobile_number'] = pending_order_details.order_user_mobile_number
+                order_data['order_delivery_address'] = pending_order_details.order_delivery_address
+                order_data['ordered_date'] = pending_order_details.ordered_date
+                order_data['ordered_timestamp'] = pending_order_details.ordered_timestamp
+                order_data['ordered_status'] = 'in_progress'
+                order_data['junkuser_customer'] = pending_order_details.junkuser_customer.junkuser_id
+            else:
+                self.errorMessage.append('Invalid pending order_id. Please provide valid pending order_id.')
+                raise ObjectDoesNotExist
+            
+            # Retrieve employee instance using user_id.
+            employee_details = Junkuser.objects.filter(junkuser_id=request.data.get('employee_id'), junkuser_is_employee=True)
+            if employee_details.exists():
+                order_data['order_approved_employee'] = employee_details.first().junkuser_id
+            else:
+                self.errorMessage.append('Invlaid employee ID. Please provide valid employee details.')
+
+            # Serialize data
+            serializer_class = self.get_serializer_class()
+            serialized_orders = serializer_class(data=order_data)
+            if serialized_orders.is_valid():
+                # serialized_orders.save()
+                # Removing pending order instance from PendingOrders model.
+                # PendingOrders.objects.delete(order_id=request.data.get('order_id'))
+                return Response(serialized_orders.errors, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response(serialized_orders.data, status=status.HTTP_201_CREATED)
+        except (ObjectDoesNotExist, KeyError):
+            return Response(self.errorMessage, status=status.HTTP_400_BAD_REQUEST)
+        
 
 
 class ApprovedOrdersDetail(mixins.RetrieveModelMixin, mixins.UpdateModelMixin,
@@ -391,6 +460,10 @@ class JunkUsersList(mixins.ListModelMixin, generics.GenericAPIView):
             raise PermissionDenied
 
     def get_queryset(self):
+        print(self.request)
+        print(dir(self.request))
+        print(self.request.user)
+        print(dir(self.request.user))
         queryset = Junkuser.objects.all()
         query_keys = self.request.query_params.keys()
         if self.JUNKUSER_QUERY_PARAMS['JUNKUSER_IS_CUSTOMER'] in query_keys:
@@ -443,6 +516,7 @@ class JunkUsersList(mixins.ListModelMixin, generics.GenericAPIView):
             junkuser_data_serialized.save()
             return Response(junkuser_data_serialized.data, status=status.HTTP_201_CREATED)
         else:
+            print(junkuser_data_serialized.errors)
             return Response(junkuser_data_serialized.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -487,23 +561,24 @@ class JunkuserCustomerRegistration(generics.GenericAPIView):
 class ValidateUserLoggedIn(APIView):
 
     def get(self, request):
-        print(f'request - {request.user}')
         return Response({'loggedIn': 'success'})
 
 
+class GetUserRoles(APIView):
+    def get(self, request):
+        userRoles = {
+            'email': request.user.email,
+            'is_employee': request.user.junkuser_is_employee,
+            'is_customer': request.user.junkuser_is_customer,
+            'is_superuser': request.user.is_superuser
+        }
+        return Response(userRoles)
+
 class CartOrdersList(mixins.ListModelMixin, mixins.CreateModelMixin, generics.GenericAPIView, ):
-    lookup_field = 'cart_user'
     permission_classes = [CartOrderCustomPermission]
     pagination_class = OrdersListPagination
-
-    cart_data_items_format = {
-        'items_details': list(),
-        'items': list(),
-        'total_price': float()
-    }
-
-    cart_post_request_data_requirement = "Input data should be a dictionary with keys and values - " \
-                                         "{'cart_user': 00, 'item_name': 'Hamburger', 'quantity':'5'}"
+    message = list()
+    cart_post_request_data_requirement = "Input data should be below format. {'cart_user': userid, 'cart_items': {'items_details':[{'item_name': 'hamburger', 'quantity':2, 'price':12}], 'items':['hamburger'], 'total_price':price of all items/}/}. Valid user id should be used. Cartobject with required userid should not be present."
 
     def get_serializer_class(self):
         return CartSerializer
@@ -519,29 +594,33 @@ class CartOrdersList(mixins.ListModelMixin, mixins.CreateModelMixin, generics.Ge
         return self.list(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        # Retrieve junkuser object and pass junkuser_id to the cart_user field of CartOrders model.
         try:
             cart_data = dict()
+            cart_data['cart_items_details'] = dict()
+            cart_data['cart_items_keys'] = list()
+            cart_data['cart_items'] = list()
+            cart_data['cart_items_total_price'] = float()
+
+            # Validating user id.
             if self.request.data.get('cart_user', None):
-                # validating id received is valid.
-                junkuser = Junkuser.objects.get(junkuser_id=request.data['cart_user']).junkuser_id
+                junkuser = Junkuser.objects.get(junkuser_id=self.request.data['cart_user']).junkuser_id
                 cart_data['cart_user'] = junkuser
             else:
+                self.message.append('Invalid user.')
                 raise KeyError
-
-            if self.request.data.get('item_name', None) and self.request.data.get('quantity', None) and self.request.data.get('price', None):
-                self.cart_data_items_format['items_details'].append(
-                    {'item_name': self.request.data.get('item_name'), 'quantity': self.request.data.get('quantity')}
-                )
-                self.cart_data_items_format['items'].append(self.request.data.get('item_name'))
-                self.cart_data_items_format['total_price'] = \
-                    float(self.request.data.get('price')) * int(self.request.data.get('price'))
-
-                cart_data['cart_items'] = json.dumps(self.cart_data_items_format)
+            
+            # Validating is there any existing cartorder instance for the user, item description and creating list of cart_items_keys, cart_items_total_price and cart_items.
+            if not CartOrders.objects.filter(cart_user=self.request.data.get('cart_user')).exists():
+                items_details = self.request.data.get('cart_items_details')
+                for item in items_details:
+                    item_name_key = Items.objects.get(item_name=item['item_name']).item_name_key
+                    cart_data['cart_items_details'][item_name_key] = item
+                    cart_data['cart_items'].append(item['item_name'])
+                    cart_data['cart_items_keys'].append(item_name_key)
+                    cart_data['cart_items_total_price'] += float(item['price']) * float(item['quantity'])
             else:
+                self.message.append('Cart Instance is already present for this user or invalid keyword arguments. Please refer doc to use this endpoint.')
                 raise KeyError
-
-            print(cart_data)
 
             serializer_class = self.get_serializer_class()
             cart_serialized = serializer_class(data=cart_data)
@@ -551,51 +630,99 @@ class CartOrdersList(mixins.ListModelMixin, mixins.CreateModelMixin, generics.Ge
             else:
                 return Response(cart_serialized.errors, status=status.HTTP_400_BAD_REQUEST)
         except (ObjectDoesNotExist, KeyError):
-            return Response(json.dumps(self.cart_post_request_data_requirement), status=status.HTTP_400_BAD_REQUEST)
+            return Response(self.message, status=status.HTTP_400_BAD_REQUEST)
 
 
 class CartOrdersDetail(mixins.RetrieveModelMixin, mixins.DestroyModelMixin, generics.GenericAPIView):
 
     permission_classes = [CartOrderCustomPermission]
+    message = list()
 
     def get_serializer_class(self):
         return CartSerializer
 
     def get_object(self, id):
         try:
-            junkuser = Junkuser.objects.get(junkuser_id=id)
-            cart_items = junkuser.user_cart_items.all()
-            if cart_items:
-                cart_items = list(junkuser.user_cart_items.all())[0]
+            junkuser = Junkuser.objects.filter(junkuser_id=id)
+            cart_items = list()
+            if junkuser.exists():
+                cart_items = junkuser.first().user_cart_items.all()
+                if cart_items:
+                    cart_items = cart_items.first()
+                return {'status': True, 'cart_items': cart_items}
             else:
-                cart_items = list()
-            return cart_items
-        except ObjectDoesNotExist:
-            return Response('Invalid user', status=status.HTTP_400_BAD_REQUEST)
+                return {'status': False}
+        except (ObjectDoesNotExist, AttributeError, Exception):
+            self.message.append('Invalid user. Please provide valid user id.')
+            return Response({'information': self.message}, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request, junkuser_id, **kwargs):
         serializer_class = self.get_serializer_class()
-        cart_data = self.get_object(junkuser_id)
-        if cart_data:
-            cart_serialized = serializer_class(cart_data)
+        cart_obj = self.get_object(junkuser_id)
+
+        if cart_obj.get('status') and cart_obj.get('cart_items'):
+            cart_serialized = serializer_class(cart_obj['cart_items'])
             return Response(cart_serialized.data)
-        else:
-            return Response({'results': [], 'message': 'No results'}, status=status.HTTP_200_OK)
+
+        elif cart_obj.get('status') and not cart_obj.get('cart_items'):
+            return Response({'results': [], 'information': self.message}, status=status.HTTP_200_OK)
+
+        elif not cart_obj.get('status'):
+            return Response({'information': 'User with provided id, is not available.'}, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request, junkuser_id, **kwargs):
-        serializer_class = self.get_serializer_class()
-        cart_instance = self.get_object(junkuser_id)
-        cart_data = request.data.copy()
-        print(cart_data)
-        cart_data['cart_items'] = str(cart_data['cart_items'])
-        print(cart_data)
-        cart_data['cart_user'] = Junkuser.objects.get(junkuser_id=request.data['cart_user']).junkuser_id
-        cart_serialized = serializer_class(cart_instance, data=cart_data, partial=True)
-        if cart_serialized.is_valid():
-            cart_serialized.save()
-            return Response(cart_serialized.data, status=status.HTTP_201_CREATED)
-        else:
-            return Response(cart_serialized.errors, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            action_type = self.request.data.get('action_type')
+            serializer_class = self.get_serializer_class()
+            cart_instance = self.get_object(junkuser_id)
+
+            if not cart_instance.get('status'):
+                self.message.append('User with provided id, is not available.')
+                return Response({'information': self.message}, status=status.HTTP_400_BAD_REQUEST)
+
+            elif cart_instance.get('status') and not cart_instance.get('cart_items'):
+                self.message.append('Cart Instance is not present for this user or invalid keyword arguments. Please try with post method or refer doc to use this endpoint.')
+                return Response({'information': self.message}, status=status.HTTP_400_BAD_REQUEST)
+            
+            else:
+                cart_data = dict()
+                cart_data['cart_items_details'] = dict()
+                cart_data['cart_items_keys'] = list()
+                cart_data['cart_items'] = list()
+                cart_data['cart_items_total_price'] = float()
+
+                # Retrieving user id.
+                if self.request.data.get('cart_user', None):
+                    junkuser = Junkuser.objects.get(junkuser_id=self.request.data['cart_user']).junkuser_id
+                    cart_data['cart_user'] = junkuser
+                else:
+                    self.message.append('User should be provided  as a value to cart_user key.')
+                    raise KeyError
+
+                # Validating is there any existing cartorder instance for the user, item description and creating list of cart_items_keys, cart_items_total_price and cart_items.
+                if CartOrders.objects.filter(cart_user=self.request.data.get('cart_user')).exists():
+                    if action_type == 'add' or action_type == 'update':
+                        items_details = self.request.data.get('cart_items_details')
+                        for item in items_details:
+                            item_name_key = Items.objects.get(item_name=item['item_name']).item_name_key
+                            cart_data['cart_items_details'][item_name_key] = item
+                            cart_data['cart_items'].append(item['item_name'])
+                            cart_data['cart_items_keys'].append(item_name_key)
+                            cart_data['cart_items_total_price'] += float(item['price']) * float(item['quantity'])
+
+                    elif action_type == 'remove':
+                        for item in self.request.data.get('cart_items'):
+                            cart_data['cart_items_keys'].append(Items.objects.get(item_name=item).item_name_key)
+                            cart_data['cart_items'].append(item)
+                
+                cart_serialized = serializer_class(cart_instance['cart_items'], data=cart_data, partial=True, context={'action_type': action_type})
+                if cart_serialized.is_valid():
+                    cart_serialized.save()
+                    return Response(cart_serialized.data, status=status.HTTP_201_CREATED)
+                else:
+                    return Response(cart_serialized.errors, status=status.HTTP_400_BAD_REQUEST)
+        except (ObjectDoesNotExist, KeyError):
+            return Response({'information':self.message}, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, junkuser_id, **kwargs):
         cart_obj = self.get_object(junkuser_id)
