@@ -15,8 +15,6 @@ def enforce_csrf(request):
 
 class CustomAuthentication(JWTAuthentication):
     def authenticate(self, request):
-        print(request)
-        print('*'*20)
         header = self.get_header(request)
 
         if header is None:

@@ -20,5 +20,6 @@ urlpatterns = [
     path('cartorders/<int:junkuser_id>/', CartOrdersDetail.as_view(), name='cart_user_detail'),
     path('junkusers/', JunkUsersList.as_view(), name='junkusers_list'),
     path('junkusers/<int:junkuser_id>/', JunkUserDetail.as_view(), name='junkusers_detail'),
-    path('userloggedin/', ValidateUserLoggedIn.as_view(), name='validate_user_logged_in')
+    path('userloggedin/', ValidateUserLoggedIn.as_view(), name='validate_user_logged_in'),
+    path('userrole/', GetUserRoles.as_view(), name='get_user_role')
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

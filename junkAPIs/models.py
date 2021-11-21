@@ -157,18 +157,22 @@ class Junkuser(AbstractBaseUser, PermissionsMixin):
         return (f'{self.junkuser_first_name}, {self.junkuser_last_name},' \
                f' Customer - {self.junkuser_is_customer}, Employee - {self.junkuser_is_employee}')
 
-
 class PendingOrders(models.Model):
 
     ORDER_STATUS = 'pending'
 
+    MOBILE_NUMBER_VALIDATOR = RegexValidator(regex=r'^[\d]{10}$',
+                                             message='Invalid phone number format')
+
     order_id = models.AutoField(primary_key=True, )
-    order_items = models.TextField(blank=False)
+    order_items = models.JSONField(blank=False)
+    order_delivery_address = models.TextField(blank=False)
+    order_user_mobile_number = models.CharField(validators=[MOBILE_NUMBER_VALIDATOR], max_length=10, blank=False)
     ordered_date = models.DateField(auto_now_add=True)
     ordered_timestamp = models.DateTimeField(auto_now_add=True)
     order_status = models.CharField(max_length=15, default=ORDER_STATUS)
     last_updated = models.DateTimeField(auto_now=True)
-    user = models.ForeignKey(Junkuser, on_delete=models.CASCADE, related_name='pending_orders')
+    junkuser_customer = models.ForeignKey(Junkuser, on_delete=models.CASCADE, related_name='pending_orders')
 
     class Meta:
         ordering = ['ordered_timestamp']
@@ -184,17 +188,20 @@ class ApprovedOrders(models.Model):
         ('cancelled', 'Cancelled')
     )
 
+    MOBILE_NUMBER_VALIDATOR = RegexValidator(regex=r'^[\d]{10}$',
+                                             message='Invalid phone number format')
+
     order_id = models.AutoField(primary_key=True)
-    order_items = models.TextField(blank=False)
+    order_items = models.JSONField(blank=False)
+    order_delivery_address = models.TextField(blank=False)
+    order_user_mobile_number = models.CharField(validators=[MOBILE_NUMBER_VALIDATOR], max_length=10, blank=False)
     ordered_date = models.DateField(blank=False)
     ordered_timestamp = models.DateTimeField(blank=False)
     approved_timestamp = models.DateTimeField(auto_now_add=True)
     order_status = models.CharField(max_length=20, choices=ORDER_STATUS, blank=False)
     order_approved_employee = models.ForeignKey(Junkuser, on_delete=models.CASCADE, related_name='orders_approved',
                                                 blank=True, null=True)
-    order_delivery_employee = models.ForeignKey(Junkuser, on_delete=models.CASCADE, related_name='orders_delivered',
-                                                blank=True, null=True)
-    user = models.ForeignKey(Junkuser, on_delete=models.CASCADE, related_name='approved_orders')
+    junkuser_customer = models.ForeignKey(Junkuser, on_delete=models.CASCADE, related_name='approved_orders')
     last_updated = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -204,10 +211,23 @@ class ApprovedOrders(models.Model):
 class CartOrders(models.Model):
 
     cart_id = models.AutoField(primary_key=True)
-    cart_items = models.JSONField(null=False)
+    cart_items_details = models.JSONField()
+    cart_items = models.JSONField()
+    cart_items_keys = models.JSONField()
+    cart_items_total_price = models.FloatField(blank=False, default=0.0)
     cart_user = models.ForeignKey(Junkuser, on_delete=models.CASCADE, related_name="user_cart_items")
     cart_added = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['cart_id']
 
+
+class DeliveryEmployees(models.Model):
+
+    delivery_employee_id = models.AutoField(primary_key=True)
+    junkuser = models.ForeignKey(Junkuser, on_delete=models.CASCADE, related_name='is_delivery')
+    employee_availability = models.BooleanField(default=True, blank=False)
+    order_id = models.ForeignKey(ApprovedOrders, on_delete=models.CASCADE, related_name="order_delivery_employee", blank=True, null=True)
+
+    class Meta:
+        ordering = ['delivery_employee_id']
