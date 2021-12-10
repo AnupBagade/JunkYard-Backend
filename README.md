@@ -7,11 +7,10 @@ Completed
   2. Items Management
   3. User Management
   4. User authentication
+  5. Cart Management
 
+Next Task
+  1. Implement celery to mimic order process from ordering to completion.
 
-In-Progress
-  1. Cart Management
-
-
-Next commit date: 01/11/2021
+Next commit date: 01/01/2022
    
